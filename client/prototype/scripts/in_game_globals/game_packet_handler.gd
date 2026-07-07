@@ -24,6 +24,16 @@ var avaliable_player_ids: Array = range(3, -1, -1)
 var host_peer: ENetPacketPeer
 var is_connected_to_host: bool = false
 
+# Reconexão Layer 2: loop de tentativas por uma janela de tempo.
+const RECONNECT_WINDOW_S: float = 30.0
+const RECONNECT_INTERVAL_S: float = 2.0
+
+var reconnecting: bool = false
+var _reconnect_timer: Timer = null
+var _reconnect_start_msec: int = 0
+var _reconnect_ip: String = ""
+var _reconnect_port: int = 0
+
 # [TCC eval] log periodico de RTT/perda em user://enet_stats_game_<role>_<unix>.csv.
 const _STATS_INTERVAL_S: float = 1.0
 var _stats_file: FileAccess
@@ -83,7 +93,7 @@ func start_host(ip_address: String = "127.0.0.1", port: int = 42069) -> void:
 		print("(Game network) Host bound creation error: ", error)
 		return
 	else:
-		print("(Game network) Host started!")
+		print("(Game network) Host started! [TEMP-TESTE] porta = ", port, " ip = ", ip_address)
 		is_host = true
 		is_connected_to_host = false
 		PlayerHostPacketHandler.setup_packet_handler()
@@ -125,12 +135,87 @@ func player_connection(peer: ENetPacketPeer) -> void:
 	is_connected_to_host = true
 	print("(Game network) connected to host")
 	PlayerHelloPkt.create(ClientPacketHandler.my_id).send(host_peer)
+	if reconnecting:
+		_finish_reconnect()
 
 func host_disconnection() -> void:
 	print("(Game network) Host disconnected")
 	is_connected_to_host = false
 	host_peer = null
 	host_connection = null
+	_start_reconnect()
+
+func _start_reconnect() -> void:
+	if reconnecting:
+		return
+	_reconnect_ip = ClientPacketHandler.reconnect_host_ip
+	_reconnect_port = ClientPacketHandler.reconnect_host_port
+	if _reconnect_ip.is_empty() or _reconnect_port == 0:
+		print("(Game network) sem dados do host; voltando ao lobby")
+		_give_up_reconnect()
+		return
+	reconnecting = true
+	_reconnect_start_msec = Time.get_ticks_msec()
+	ReconnectOverlay.show_message("Conexão perdida — reconectando…")
+	if _reconnect_timer == null:
+		_reconnect_timer = Timer.new()
+		_reconnect_timer.wait_time = RECONNECT_INTERVAL_S
+		_reconnect_timer.timeout.connect(_attempt_reconnect)
+		add_child(_reconnect_timer)
+	_reconnect_timer.start()
+	_attempt_reconnect()
+
+func _attempt_reconnect() -> void:
+	if not reconnecting:
+		return
+	if Time.get_ticks_msec() - _reconnect_start_msec >= int(RECONNECT_WINDOW_S * 1000.0):
+		_give_up_reconnect()
+		return
+	# Uma tentativa por vez: se já há uma conexão em handshake, espera o
+	# EVENT_CONNECT (sucesso) ou EVENT_DISCONNECT (falha -> host_connection volta a null).
+	if host_connection != null:
+		return
+	print("(Game network) tentando reconectar a ", _reconnect_ip, ":", _reconnect_port)
+	reconnect_to_host(_reconnect_ip, _reconnect_port)
+
+func reconnect_to_host(ip: String, port: int) -> void:
+	# Caminho enxuto: recria a conexão SEM re-rodar setup_packet_handler
+	# (signals from_host_packet já conectados) nem re-emitir game_scripts_setup.
+	var client_connection: ENetConnection = ENetConnection.new()
+	var error: Error = client_connection.create_host(1)
+	if error:
+		print("(Game network) erro recriando host na reconexão: ", error)
+		return
+	host_connection = client_connection
+	is_host = false
+	host_peer = client_connection.connect_to_host(ip, port)
+	host_peer.set_timeout(0, 10000, 10000)
+
+func _finish_reconnect() -> void:
+	reconnecting = false
+	if _reconnect_timer != null:
+		_reconnect_timer.stop()
+	ReconnectOverlay.hide_overlay()
+	print("(Game network) reconexão concluída")
+
+func _give_up_reconnect() -> void:
+	reconnecting = false
+	if _reconnect_timer != null:
+		_reconnect_timer.stop()
+	ReconnectOverlay.hide_overlay()
+	print("(Game network) reconexão falhou; saindo da sala")
+	# Sai pela Layer 1; o servidor responde QUIT_ROOM e o cliente volta ao lobby.
+	if ProtNetworkHandler.server_peer != null:
+		QuitRequestClass.create(ClientPacketHandler.current_room_id).send(ProtNetworkHandler.server_peer)
+
+func cancel_reconnect() -> void:
+	if not reconnecting:
+		return
+	reconnecting = false
+	if _reconnect_timer != null:
+		_reconnect_timer.stop()
+	ReconnectOverlay.hide_overlay()
+	print("(Game network) reconexão cancelada (sala dissolvida)")
 
 func can_send_to_host() -> bool:
 	return !is_host and is_connected_to_host and host_peer != null

@@ -14,6 +14,10 @@ signal host_minigame_grade(team_index: int, grade: float, comment: String)
 var my_ip: String
 var room_port: int
 
+# Dados do host da sala para reconexão Layer 2 (cacheados no join).
+var reconnect_host_ip: String = ""
+var reconnect_host_port: int = 0
+
 var my_id: int = -1
 var temporary_player_name: String = "player"
 var current_room_id: int
@@ -54,7 +58,10 @@ func packet_handler(data: PackedByteArray) -> void:
 		PacketTypeClass.PACKET_TYPE.JOIN_ROOM:
 			join_manager(data)
 		PacketTypeClass.PACKET_TYPE.QUIT_ROOM:
+			GamePacketHandler.cancel_reconnect()
 			current_room_id = -1
+			reconnect_host_ip = ""
+			reconnect_host_port = 0
 			GamePacketHandler.cleanup_connection()
 			spawned_ids.clear()
 			players_scenes.clear()
@@ -84,6 +91,8 @@ func packet_handler(data: PackedByteArray) -> void:
 func join_manager(data: PackedByteArray) -> void:
 	var join_packet: JoinRoomClass = JoinRoomClass.create_from_data(data)
 	current_room_id = join_packet.room_id
+	reconnect_host_ip = join_packet.host_ip
+	reconnect_host_port = join_packet.room_port
 	GamePacketHandler.start_player(join_packet.host_ip, join_packet.room_port)
 	join_room.emit(join_packet.room_id)
 	sync_spawns(join_packet.remote_ids)

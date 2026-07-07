@@ -150,7 +150,12 @@ func _on_host_player_reconnected(player_id: int) -> void:
 		return
 
 func _on_assign_signal(pkt: MinigameAssignPkt) -> void:
-	ClientPacketHandler.pending_minigame_assign = null
+	# NÃO zera pending_minigame_assign aqui: numa reconexão a sessão antiga
+	# (ainda viva até a troca de cena diferida) receberia este sinal e apagaria
+	# o buffer antes de a nova sessão nascer, deixando o player preso em
+	# "aguardando atribuição". Quem consome/limpa o buffer é o _ready da sessão
+	# que efetivamente monta. O buffer é sobrescrito no próximo assign e limpo
+	# no QUIT_ROOM.
 	_apply_assignment(pkt.team, pkt.role, pkt.partner_id, pkt.member_ids)
 
 func _apply_assignment(team: int, role: int, partner: int, members: Array[int]) -> void:
