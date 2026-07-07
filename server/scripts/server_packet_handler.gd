@@ -167,6 +167,38 @@ func quit_room_request(peer: ENetPacketPeer, data: PackedByteArray) -> void:
 	for current_peer in room.current_players:
 		HasQuittedPkt.create(room.current_players_id).send(current_peer)
 
+func handle_peer_drop(peer: ENetPacketPeer) -> void:
+	# Chamado pelo network_handler quando um peer Layer-1 cai (crash/timeout).
+	# Se for host de uma sala, dissolve a sala; se for membro, remove e avisa.
+	var host_room_id: int = -1
+	for room_id in rooms.keys():
+		if rooms[room_id].host_peer == peer:
+			host_room_id = room_id
+			break
+	if host_room_id != -1:
+		var room: RoomStorage = rooms[host_room_id]
+		for current_peer in room.current_players.duplicate():
+			current_peer.set_meta("in_room", false)
+			if current_peer != peer:
+				QuitRoomClass.create().send(current_peer)
+		rooms.erase(host_room_id)
+		created_rooms_id.erase(host_room_id)
+		num_room.append(host_room_id)
+		num_room.sort()
+		print("(Server) host caiu; sala ", host_room_id, " dissolvida")
+		return
+	for room_id in rooms.keys():
+		var room: RoomStorage = rooms[room_id]
+		if peer in room.current_players:
+			room.remove_player(peer)
+			if peer.has_meta("id"):
+				room.remove_player_id(peer.get_meta("id"))
+			room.remove_player_name(peer.get_meta("name", ""))
+			for current_peer in room.current_players:
+				HasQuittedPkt.create(room.current_players_id).send(current_peer)
+			print("(Server) membro caiu; removido da sala ", room_id)
+			return
+
 #func is_peer_owner(room_id: int, peer: ENetPacketPeer) -> bool:
 	#if not rooms.has(room_id) or rooms[room_id].is_empty():
 		#return false

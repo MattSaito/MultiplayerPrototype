@@ -63,6 +63,7 @@ func peer_connected(peer: ENetPacketPeer) -> void:
 	print("(Server network) Peer: ", peer_id, " successfully connected")
 
 func peer_disconnected(peer: ENetPacketPeer) -> void:
+	ServerPacketHandler.handle_peer_drop(peer)
 	var peer_id: int = peer.get_meta("id")
 	avaliable_peer_ids.push_back(peer_id)
 	peers_connected.erase(peer_id)
