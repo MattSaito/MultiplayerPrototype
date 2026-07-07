@@ -60,6 +60,7 @@ func _ready() -> void:
 	if GamePacketHandler.is_host:
 		PlayerHostPacketHandler.player_minigame_answer_signal.connect(_on_player_answer_received)
 		ClientPacketHandler.host_minigame_grade.connect(_on_grade_loopback)
+		PlayerHostPacketHandler.player_reconnected.connect(_on_host_player_reconnected)
 		# Conhece os ids da partida e calcula tudo localmente; não fica esperando
 		# seu próprio pacote pelo loopback (broadcast não volta ao remetente).
 		_host_assign_and_dispatch()
@@ -129,6 +130,25 @@ func _host_assign_and_dispatch() -> void:
 		else:
 			MinigameAssignPkt.create(player_id, team, role, partner, members).broadcast(GamePacketHandler.host_connection)
 
+func _on_host_player_reconnected(player_id: int) -> void:
+	var peer: ENetPacketPeer = PlayerHostPacketHandler.peer_by_id.get(player_id)
+	if peer == null:
+		return
+	for t in host_team_state.size():
+		var state: Dictionary = host_team_state[t]
+		var members: Array = state["members"]
+		if player_id not in members:
+			continue
+		# members[0] foi DOC e members[1] QUIZ na atribuição inicial (ids ordenados).
+		var role: int = MinigameAssignPkt.ROLE.DOC if int(members[0]) == player_id else MinigameAssignPkt.ROLE.QUIZ
+		var partner: int = int(members[1]) if int(members[0]) == player_id else int(members[0])
+		var members_typed: Array[int] = [int(members[0]), int(members[1])]
+		MinigameAssignPkt.create(player_id, t, role, partner, members_typed).send(peer)
+		# Progresso corrente sobrepõe o papel/pergunta iniciais no player.
+		MinigameProgressPkt.create(t, int(state["question_idx"]), int(state["quiz_player_id"]), bool(state["finished"])).send(peer)
+		print("(Host) resync de minigame para ", player_id, " (time ", t, ")")
+		return
+
 func _on_assign_signal(pkt: MinigameAssignPkt) -> void:
 	ClientPacketHandler.pending_minigame_assign = null
 	_apply_assignment(pkt.team, pkt.role, pkt.partner_id, pkt.member_ids)
@@ -151,6 +171,12 @@ func _apply_assignment(team: int, role: int, partner: int, members: Array[int]) 
 	_update_team_info_label()
 	_refresh_hud_labels()
 	_show_view_for_current_role()
+
+	# Reconexão: se já havia progresso bufferizado para a minha dupla, aplica
+	# para pular para a pergunta/papel correntes.
+	if ClientPacketHandler.pending_minigame_progress_by_team.has(my_team):
+		var pg: MinigameProgressPkt = ClientPacketHandler.pending_minigame_progress_by_team[my_team]
+		_apply_progress(pg.team, pg.question_idx, pg.quiz_player_id, pg.finished != 0)
 
 func _show_view_for_current_role() -> void:
 	if my_finished:

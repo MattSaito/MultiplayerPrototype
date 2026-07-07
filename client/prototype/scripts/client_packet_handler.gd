@@ -24,6 +24,10 @@ var players_scenes: Dictionary[int, String] = {}
 # não está montada. Bufferizamos aqui (autoload) para o MinigameSession
 # consumir no seu _ready().
 var pending_minigame_assign: MinigameAssignPkt = null
+# Buffer do último progresso por dupla (team -> MinigameProgressPkt). Usado na
+# reconexão para reconstruir a pergunta/papel correntes caso o pacote chegue
+# antes da cena de minigame montar. Por-dupla para não haver corrida entre times.
+var pending_minigame_progress_by_team: Dictionary = {}
 # -1 enquanto fora do minigame. Quando setado, o chat filtra mensagens fora-do-time
 # e colore os nomes por dupla.
 var minigame_team: int = -1
@@ -35,6 +39,8 @@ func _ready() -> void:
 	PlayerHostPacketHandler.player_change_scene_signal.connect(on_player_scene_received)
 	PlayerHostPacketHandler.host_force_scene_signal.connect(on_force_scene_received)
 	PlayerHostPacketHandler.host_minigame_assign_signal.connect(on_minigame_assign_received)
+	PlayerHostPacketHandler.player_reconnected.connect(on_player_reconnected)
+	PlayerHostPacketHandler.host_minigame_progress_signal.connect(_buffer_minigame_progress)
 
 func packet_handler(data: PackedByteArray) -> void:
 	var packet_type: int = int(data.decode_u8(0))
@@ -53,6 +59,7 @@ func packet_handler(data: PackedByteArray) -> void:
 			spawned_ids.clear()
 			players_scenes.clear()
 			pending_minigame_assign = null
+			pending_minigame_progress_by_team.clear()
 			minigame_team = -1
 			minigame_team_members.clear()
 			quit_room.emit()
@@ -164,6 +171,20 @@ func on_player_scene_received(_peer: ENetPacketPeer, data: PackedByteArray) -> v
 func on_force_scene_received(data: PackedByteArray) -> void:
 	var packet: SceneForcePacket = SceneForcePacket.create_from_data(data)
 	GameManager.goto_scene(packet.scene_path)
+
+func _buffer_minigame_progress(data: PackedByteArray) -> void:
+	var pkt: MinigameProgressPkt = MinigameProgressPkt.create_from_data(data)
+	pending_minigame_progress_by_team[pkt.team] = pkt
+
+func on_player_reconnected(player_id: int) -> void:
+	if not GamePacketHandler.is_host:
+		return
+	var peer: ENetPacketPeer = PlayerHostPacketHandler.peer_by_id.get(player_id)
+	if peer == null:
+		return
+	var scene: String = players_scenes.get(player_id, get_tree().current_scene.scene_file_path)
+	SceneForcePacket.create(scene).send(peer)
+	print("(Host) resync de cena para ", player_id, " -> ", scene)
 
 func on_minigame_assign_received(data: PackedByteArray) -> void:
 	var packet: MinigameAssignPkt = MinigameAssignPkt.create_from_data(data)

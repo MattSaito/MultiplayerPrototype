@@ -96,10 +96,13 @@ func player_connected(_peer: ENetPacketPeer) -> void:
 		SceneSyncPacket.create(ClientPacketHandler.my_id, current_scene_path).send(_peer)
 
 func peer_disconnected(peer: ENetPacketPeer) -> void:
-	var player_id: int = peer.get_meta("id")
-	avaliable_player_ids.push_back(player_id)
-	
-	print("(Game network) Peer: ", player_id, " successfully disconnected")
+	if peer.has_meta("game_id"):
+		var gid: int = peer.get_meta("game_id")
+		if gid not in PlayerHostPacketHandler.disconnected_ids:
+			PlayerHostPacketHandler.disconnected_ids.append(gid)
+		print("(Game network) player ", gid, " caiu (Layer 2); aguardando reconexão")
+	else:
+		print("(Game network) peer sem game_id desconectou")
 
 # create_host(1): só um peer outbound (o host da sala).
 # is_host=false roteia receives via from_host_packet.
@@ -121,7 +124,7 @@ func player_connection(peer: ENetPacketPeer) -> void:
 	host_peer = peer
 	is_connected_to_host = true
 	print("(Game network) connected to host")
-	return
+	PlayerHelloPkt.create(ClientPacketHandler.my_id).send(host_peer)
 
 func host_disconnection() -> void:
 	print("(Game network) Host disconnected")
